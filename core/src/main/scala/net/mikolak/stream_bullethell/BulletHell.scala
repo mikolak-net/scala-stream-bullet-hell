@@ -1,9 +1,8 @@
 package net.mikolak.stream_bullethell
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Props}
-import akka.stream.ActorMaterializer
-import akka.stream.actor.ActorPublisher
+import akka.actor.{ActorRef, ActorSystem}
 import akka.stream.scaladsl.{Flow, Sink, Source}
+import akka.stream.{ActorMaterializer, OverflowStrategy}
 import com.badlogic.gdx.graphics.g2d.{BitmapFont, SpriteBatch}
 import com.badlogic.gdx.graphics.{GL20, OrthographicCamera}
 import com.badlogic.gdx.{Game, Gdx, ScreenAdapter}
@@ -26,7 +25,7 @@ class MainScreen extends ScreenAdapter {
   implicit val actorSystem = ActorSystem("game")
   implicit val materializer = ActorMaterializer()
 
-  val tickSource: Source[Nothing, ActorRef] = Source.actorPublisher(Props[GameTickPublisherActor])
+  val tickSource = Source.actorRef[TickDelta](0, OverflowStrategy.fail)
   var tickActor: Option[ActorRef] = None
 
   lazy val font = {
@@ -62,22 +61,5 @@ class MainScreen extends ScreenAdapter {
 
   override def dispose(): Unit = {
     actorSystem.terminate()
-  }
-}
-
-class GameTickPublisherActor() extends Actor with ActorPublisher[TickDelta] {
-
-  private var updateStack = List.empty[TickDelta]
-
-  override def receive = {
-    case delta: TickDelta =>
-      updateStack :+= delta
-
-      if (isActive && totalDemand > 0) {
-        val (toTransmit, toPreserve) =
-          updateStack.splitAt((updateStack.length - totalDemand.toInt).max(0))
-        toTransmit.foreach(onNext)
-        updateStack = toPreserve
-      }
   }
 }
