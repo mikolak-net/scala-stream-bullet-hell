@@ -1,5 +1,8 @@
 package net.mikolak.stream_bullethell
 
+import akka.actor.{ActorRef, ActorSystem}
+import akka.stream.ActorMaterializer
+import akka.stream.scaladsl.{Flow, Sink, Source}
 import com.badlogic.gdx.graphics.g2d.{BitmapFont, SpriteBatch}
 import com.badlogic.gdx.graphics.{GL20, OrthographicCamera}
 import com.badlogic.gdx.{Game, Gdx, ScreenAdapter}
@@ -19,14 +22,32 @@ class MainScreen extends ScreenAdapter {
 
   var tick = 1L
 
+  implicit val actorSystem = ActorSystem("game")
+  implicit val materializer = ActorMaterializer()
+
+  val tickSource: Source[Nothing, ActorRef] = ???
+  var tickActor: Option[ActorRef] = None
+
   lazy val font = {
     val f = new BitmapFont()
     f.getData.setScale(2f)
     f
   }
 
-  override def render(delta: Float) = {
-    tick += 1
+  override def show() = {
+    camera.setToOrtho(false, 800, 480)
+
+    val tickSettingFlow = Flow[TickDelta].map { td =>
+      tick += 1
+      td
+    }
+    val graph = tickSource.via(tickSettingFlow).to(Sink.ignore)
+
+    tickActor = Some(graph.run())
+  }
+
+  override def render(delta: TickDelta) = {
+    tickActor.foreach(_ ! delta)
 
     //print tick
     Gdx.gl.glClearColor(0, 0, 0.5f, 1)
@@ -38,7 +59,7 @@ class MainScreen extends ScreenAdapter {
     batch.end()
   }
 
-  override def show() = {
-    camera.setToOrtho(false, 800, 480)
+  override def dispose(): Unit = {
+    actorSystem.terminate()
   }
 }
