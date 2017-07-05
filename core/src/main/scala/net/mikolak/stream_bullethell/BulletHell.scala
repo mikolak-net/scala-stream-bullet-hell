@@ -9,9 +9,8 @@ import com.badlogic.gdx.{Game, Gdx, ScreenAdapter}
 
 class BulletHell extends Game {
 
-  override def create(): Unit = {
+  override def create(): Unit =
     setScreen(new MainScreen)
-  }
 
 }
 
@@ -59,7 +58,6 @@ class MainScreen extends ScreenAdapter {
     batch.end()
   }
 
-  override def dispose(): Unit = {
+  override def dispose(): Unit =
     actorSystem.terminate()
-  }
 }
