@@ -24,7 +24,7 @@ class MainScreen extends ScreenAdapter {
   implicit val actorSystem = ActorSystem("game")
   implicit val materializer = ActorMaterializer()
 
-  val tickSource = Source.actorRef[TickDelta](0, OverflowStrategy.fail)
+  val tickSource = Source.actorRef[TickDelta](0, OverflowStrategy.dropNew)
   var tickActor: Option[ActorRef] = None
 
   lazy val font = {
