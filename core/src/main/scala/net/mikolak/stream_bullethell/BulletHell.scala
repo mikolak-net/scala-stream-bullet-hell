@@ -1,8 +1,19 @@
 package net.mikolak.stream_bullethell
 
+import akka.NotUsed
 import akka.actor.{ActorRef, ActorSystem}
-import akka.stream.scaladsl.{Flow, Sink, Source}
-import akka.stream.{ActorMaterializer, ActorMaterializerSettings, OverflowStrategy, Supervision}
+import akka.stream.scaladsl.{
+  Broadcast,
+  Flow,
+  GraphDSL,
+  Keep,
+  Merge,
+  Sink,
+  SinkQueueWithCancel,
+  Source,
+  ZipN
+}
+import akka.stream._
 import com.badlogic.gdx.graphics.g2d.{BitmapFont, SpriteBatch}
 import com.badlogic.gdx.graphics.{GL20, OrthographicCamera}
 import com.badlogic.gdx.math.Vector2
@@ -12,6 +23,7 @@ import com.badlogic.gdx.{Game, Gdx, ScreenAdapter}
 import com.badlogic.gdx.utils.{Array => ArrayGdx}
 
 import scala.collection.JavaConverters._
+import scala.concurrent.duration.Duration
 import scala.util.Random
 
 object config {
@@ -36,6 +48,9 @@ class BulletHell extends Game {
 
 class MainScreen extends ScreenAdapter {
 
+  type Action = () => Unit
+  type ActionQueue = SinkQueueWithCancel[Seq[Action]]
+
   lazy val camera = new OrthographicCamera()
   val batch: SpriteBatch = new SpriteBatch()
 
@@ -52,6 +67,7 @@ class MainScreen extends ScreenAdapter {
 
   val tickSource = Source.actorRef[GameState](0, OverflowStrategy.dropNew)
   var tickActor: Option[ActorRef] = None
+  var actionQueue: Option[ActionQueue] = None
 
   lazy val world = new World(new Vector2(0, 0), false)
 
@@ -66,37 +82,67 @@ class MainScreen extends ScreenAdapter {
   override def show() = {
     camera.setToOrtho(false, config.world.Width.size, config.world.Height.size)
 
-    val tickSettingFlow = {
-
-      Flow[GameState].map {
-        case gs @ GameState(delta, bodies) =>
-          if (bodies.isEmpty) {
-            for (_ <- 1 to config.world.gen.NumCircles) {
-              val randomLocation = new Vector2(Random.nextInt(config.world.Width.size),
-                                               Random.nextInt(config.world.Height.size))
-              createSphere(randomLocation)
-            }
-          } else {
-            import config.world.gen
-            def randomForceComponent = Random.nextInt(2 * gen.MaxForce) - gen.MaxForce
-
-            for (body <- bodies) {
-              if (tick % gen.ForceApplyTickInterval == 0) {
-                body.applyForceToCenter(randomForceComponent, randomForceComponent, true)
-              }
-            }
+    val generator = (g: GameState) => { () =>
+      {
+        if (g.bodies.isEmpty) {
+          for (_ <- 1 to config.world.gen.NumCircles) {
+            val randomLocation = new Vector2(Random.nextInt(config.world.Width.size),
+                                             Random.nextInt(config.world.Height.size))
+            createSphere(randomLocation)
           }
-          world.step(delta, 6, 2)
-
-          tick += 1
-          gs
+        }
       }
     }
 
-    val graph = tickSource.via(tickSettingFlow).to(Sink.ignore)
+    val mover = (g: GameState) => {
+      import config.world.gen
+      def randomForceComponent = Random.nextInt(2 * gen.MaxForce) - gen.MaxForce
 
-    tickActor = Some(graph.run())
+      () =>
+        {
+          for (body <- g.bodies) {
+            if (tick % gen.ForceApplyTickInterval == 0) {
+              body.applyForceToCenter(randomForceComponent, randomForceComponent, true)
+            }
+          }
+        }
+    }
+
+    val tickIncrementer = (_: GameState) => { () =>
+      {
+        tick += 1
+      }
+    }
+
+    val worldUpdater = (g: GameState) => { () =>
+      {
+        world.step(g.delta, 6, 2)
+      }
+    }
+
+    val graph = tickSource
+      .via(setUpLogic(List(generator, mover, worldUpdater, tickIncrementer)))
+      .toMat(Sink.queue())(Keep.both)
+
+    val (sourceActor, sinkQueue) = graph.run()
+
+    tickActor = Some(sourceActor)
+    actionQueue = Some(sinkQueue)
   }
+
+  private def setUpLogic(
+      elements: List[(GameState) => Action]): Flow[GameState, Seq[Action], NotUsed] =
+    Flow.fromGraph(GraphDSL.create() { implicit b =>
+      import GraphDSL.Implicits._
+      val scatter = b.add(Broadcast[GameState](elements.size))
+      val gather = b.add(ZipN[Action](elements.size))
+
+      for (e <- elements) {
+        scatter ~> b.add(Flow.fromFunction(e)) ~> gather
+      }
+
+      FlowShape(scatter.in, gather.out)
+    })
 
   private def createSphere(center: Vector2) = {
     val bodyDef = new BodyDef
@@ -120,6 +166,16 @@ class MainScreen extends ScreenAdapter {
       val bodyArray = ArrayGdx.of(classOf[Body])
       world.getBodies(bodyArray)
       actor ! GameState(delta, bodyArray.asScala.toList)
+    }
+
+    import scala.concurrent.Await.result
+
+    for {
+      q <- actionQueue
+      actions <- result(q.pull(), Duration.Inf)
+      a <- actions
+    } {
+      a()
     }
 
     Gdx.gl.glClearColor(0, 0, 0.5f, 1)
