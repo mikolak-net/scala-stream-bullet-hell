@@ -46,8 +46,9 @@ class MainScreen extends ScreenAdapter {
     Supervision.Stop
   }
   implicit val actorSystem = ActorSystem("game")
-  implicit val materializer = ActorMaterializer(ActorMaterializerSettings(actorSystem)
-    .withSupervisionStrategy(loggingDecider))
+  implicit val materializer = ActorMaterializer(
+    ActorMaterializerSettings(actorSystem)
+      .withSupervisionStrategy(loggingDecider))
 
   val tickSource = Source.actorRef[GameState](0, OverflowStrategy.dropNew)
   var tickActor: Option[ActorRef] = None
@@ -67,26 +68,28 @@ class MainScreen extends ScreenAdapter {
 
     val tickSettingFlow = {
 
-      Flow[GameState].map { case gs@GameState(delta, bodies) =>
-        if(bodies.isEmpty) {
-          for(_ <- 1 to config.world.gen.NumCircles) {
-            val randomLocation = new Vector2(Random.nextInt(config.world.Width.size), Random.nextInt(config.world.Height.size))
-            createSphere(randomLocation)
-          }
-        } else {
-          import config.world.gen
-          def randomForceComponent = Random.nextInt(2*gen.MaxForce)-gen.MaxForce
+      Flow[GameState].map {
+        case gs @ GameState(delta, bodies) =>
+          if (bodies.isEmpty) {
+            for (_ <- 1 to config.world.gen.NumCircles) {
+              val randomLocation = new Vector2(Random.nextInt(config.world.Width.size),
+                                               Random.nextInt(config.world.Height.size))
+              createSphere(randomLocation)
+            }
+          } else {
+            import config.world.gen
+            def randomForceComponent = Random.nextInt(2 * gen.MaxForce) - gen.MaxForce
 
-          for(body <- bodies) {
-            if(tick % gen.ForceApplyTickInterval == 0) {
-              body.applyForceToCenter(randomForceComponent, randomForceComponent, true)
+            for (body <- bodies) {
+              if (tick % gen.ForceApplyTickInterval == 0) {
+                body.applyForceToCenter(randomForceComponent, randomForceComponent, true)
+              }
             }
           }
-        }
-        world.step(delta, 6, 2)
+          world.step(delta, 6, 2)
 
-        tick += 1
-        gs
+          tick += 1
+          gs
       }
     }
 
@@ -129,7 +132,6 @@ class MainScreen extends ScreenAdapter {
 
     debugRenderer.render(world, camera.combined)
   }
-
 
   override def hide() =
     actorSystem.terminate()
