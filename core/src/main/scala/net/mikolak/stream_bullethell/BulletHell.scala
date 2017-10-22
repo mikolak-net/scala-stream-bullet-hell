@@ -7,7 +7,6 @@ import akka.stream.scaladsl.{
   Flow,
   GraphDSL,
   Keep,
-  Merge,
   Sink,
   SinkQueueWithCancel,
   Source,
@@ -65,7 +64,8 @@ class MainScreen extends ScreenAdapter {
     ActorMaterializerSettings(actorSystem)
       .withSupervisionStrategy(loggingDecider))
 
-  val tickSource = Source.actorRef[GameState](0, OverflowStrategy.dropNew)
+  val tickSource = Source.actorRef[GameState](bufferSize = 1, OverflowStrategy.dropNew)
+  val inputSource = Source.actorRef[KeyboardInput](bufferSize = 0, OverflowStrategy.dropTail)
   var tickActor: Option[ActorRef] = None
   var actionQueue: Option[ActionQueue] = None
 
@@ -120,14 +120,33 @@ class MainScreen extends ScreenAdapter {
       }
     }
 
-    val graph = tickSource
-      .via(setUpLogic(List(generator, mover, worldUpdater, tickIncrementer)))
-      .toMat(Sink.queue())(Keep.both)
+    val inputLogger = (g: GameState) => { () =>
+      {
+        if (g.events.nonEmpty) {
+          println(g.events)
+        }
+      }
+    }
 
-    val (sourceActor, sinkQueue) = graph.run()
+    val bufferSize = 100
+
+    val graph =
+      tickSource
+        .zipWithMat(
+          inputSource
+            .batch(bufferSize, List(_))(_ :+ _)
+            .prepend(Source.single(List.empty[KeyboardInput]))
+            .expand(elem =>
+              Iterator.single(elem) ++ Iterator.continually(List.empty[KeyboardInput]))
+        )((gs, es) => gs.copy(events = es))(Keep.both)
+        .via(setUpLogic(List(generator, mover, worldUpdater, tickIncrementer, inputLogger)))
+        .toMat(Sink.queue())(Keep.both)
+
+    val ((sourceActor, inputActor), sinkQueue) = graph.run()
 
     tickActor = Some(sourceActor)
     actionQueue = Some(sinkQueue)
+    Gdx.input.setInputProcessor(new KeyboardProxy(inputActor))
   }
 
   private def setUpLogic(
@@ -193,7 +212,7 @@ class MainScreen extends ScreenAdapter {
     actorSystem.terminate()
 }
 
-case class GameState(delta: TickDelta, bodies: List[Body])
+case class GameState(delta: TickDelta, bodies: List[Body], events: List[KeyboardInput] = List.empty)
 
 case class Dim(d: Float) extends AnyVal {
   def size = d.toInt
