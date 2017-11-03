@@ -13,6 +13,7 @@ import akka.stream.scaladsl.{
   ZipN
 }
 import akka.stream._
+import com.badlogic.gdx.Input.Keys
 import com.badlogic.gdx.graphics.g2d.{BitmapFont, SpriteBatch}
 import com.badlogic.gdx.graphics.{GL20, OrthographicCamera}
 import com.badlogic.gdx.math.Vector2
@@ -20,6 +21,7 @@ import com.badlogic.gdx.physics.box2d.BodyDef.BodyType
 import com.badlogic.gdx.physics.box2d._
 import com.badlogic.gdx.{Game, Gdx, ScreenAdapter}
 import com.badlogic.gdx.utils.{Array => ArrayGdx}
+import net.mikolak.stream_bullethell.config.world
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.Duration
@@ -88,8 +90,13 @@ class MainScreen extends ScreenAdapter {
           for (_ <- 1 to config.world.gen.NumCircles) {
             val randomLocation = new Vector2(Random.nextInt(config.world.Width.size),
                                              Random.nextInt(config.world.Height.size))
-            createSphere(randomLocation)
+            createSphere(randomLocation, Enemy)
           }
+
+          //player body
+          createSphere(new Vector2(config.world.Width.size, config.world.Height.size).scl(0.5f),
+                       Player,
+                       radius = 2f)
         }
       }
     }
@@ -100,7 +107,7 @@ class MainScreen extends ScreenAdapter {
 
       () =>
         {
-          for (body <- g.bodies) {
+          for (body <- g.bodies if body.getUserData == Enemy) {
             if (tick % gen.ForceApplyTickInterval == 0) {
               body.applyForceToCenter(randomForceComponent, randomForceComponent, true)
             }
@@ -120,10 +127,26 @@ class MainScreen extends ScreenAdapter {
       }
     }
 
-    val inputLogger = (g: GameState) => { () =>
+    val inputHandler = (g: GameState) => { () =>
       {
-        if (g.events.nonEmpty) {
-          println(g.events)
+        for {
+          playerBody <- g.bodies.find(_.getUserData == Player)
+          e <- g.events
+        } {
+          val inputMults = e match {
+            case KeyUp(keycode) =>
+              keycode match {
+                case Keys.LEFT  => (-1f, 0f)
+                case Keys.RIGHT => (1f, 0f)
+                case Keys.UP    => (0f, 1f)
+                case Keys.DOWN  => (0f, -1f)
+                case _          => (0f, 0f)
+              }
+            case _ => (0f, 0f)
+          }
+
+          val v = (new Vector2(_: Float, _: Float)).tupled(inputMults).scl(1000f)
+          playerBody.applyForceToCenter(v, true)
         }
       }
     }
@@ -139,7 +162,7 @@ class MainScreen extends ScreenAdapter {
             .expand(elem =>
               Iterator.single(elem) ++ Iterator.continually(List.empty[KeyboardInput]))
         )((gs, es) => gs.copy(events = es))(Keep.both)
-        .via(setUpLogic(List(generator, mover, worldUpdater, tickIncrementer, inputLogger)))
+        .via(setUpLogic(List(generator, mover, worldUpdater, tickIncrementer, inputHandler)))
         .toMat(Sink.queue())(Keep.both)
 
     val ((sourceActor, inputActor), sinkQueue) = graph.run()
@@ -163,13 +186,13 @@ class MainScreen extends ScreenAdapter {
       FlowShape(scatter.in, gather.out)
     })
 
-  private def createSphere(center: Vector2) = {
+  private def createSphere(center: Vector2, bodyType: BodyType, radius: Float = 1) = {
     val bodyDef = new BodyDef
     bodyDef.`type` = BodyType.DynamicBody
     bodyDef.position.set(center)
 
     val circle = new CircleShape()
-    circle.setRadius(1)
+    circle.setRadius(radius)
 
     val fixtureDef = new FixtureDef()
     fixtureDef.shape = circle
@@ -178,6 +201,7 @@ class MainScreen extends ScreenAdapter {
     val body = world.createBody(bodyDef)
     body.createFixture(fixtureDef)
     fixtureDef.shape.dispose()
+    body.setUserData(bodyType)
   }
 
   override def render(delta: TickDelta) = {
