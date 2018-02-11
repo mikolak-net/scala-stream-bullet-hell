@@ -21,10 +21,11 @@ scalaVersion := "2.12.4"
 
 lazy val coreSettings = plugins.JvmPlugin.projectSettings ++ Seq(
   libgdxVersion := "1.9.6",
-    akkaVersion := "2.5.6",
+    akkaVersion := "2.5.11",
   libraryDependencies ++= Seq(
     "com.badlogicgames.gdx" % "gdx" % libgdxVersion.value,
-    "com.badlogicgames.gdx" % "gdx-box2d" % libgdxVersion.value
+    "com.badlogicgames.gdx" % "gdx-box2d" % libgdxVersion.value,
+    "net.mikolak" %% "travesty" % s"0.9_${akkaVersion.value}"
   )  ++
     Seq("akka-stream"
     ).map("com.typesafe.akka" %% _ % akkaVersion.value),
@@ -48,10 +49,11 @@ lazy val coreSettings = plugins.JvmPlugin.projectSettings ++ Seq(
     "-target:jvm-1.8"
   ),
   cancelable := true,
-  exportJars := true
+  exportJars := true,
+  resolvers += "indvd00m-github-repo" at "https://raw.githubusercontent.com/indvd00m/maven-repo/master/repository"
 )
 
-lazy val extractNatives = TaskKey[Unit]("extract-natives", "Extracts native files")
+lazy val extractNatives = TaskKey[Unit]("extract-natives", "Extracts native files") 
 
 lazy val natives = Seq(
   ivyConfigurations += config("natives"),
