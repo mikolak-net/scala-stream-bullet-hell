@@ -161,9 +161,8 @@ class MainScreen extends ScreenAdapter {
 
     val graph =
       tickSource.↓.zipWithMat(
-        inputSource.↓.batch(bufferSize, List(_))(_ :+ _).↓.prepend(
-          Source.single(List.empty[KeyboardInput]).↓).↓.expand(elem =>
-          Iterator.single(elem) ++ Iterator.continually(List.empty[KeyboardInput])).↓
+        inputSource.↓.batch(bufferSize, List(_))(_ :+ _).↓.extrapolate(_ =>
+          Iterator.continually(List.empty[KeyboardInput]), Some(List.empty[KeyboardInput])).↓
       )((gs, es) => gs.copy(events = es))(Keep.both)
         .via(setUpLogic(List(generator, mover, worldUpdater, tickIncrementer, inputHandler)).↓)
         .toMat(Sink.queue())(Keep.both)
