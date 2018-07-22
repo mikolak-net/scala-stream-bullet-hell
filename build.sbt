@@ -21,7 +21,7 @@ scalaVersion := "2.12.4"
 
 lazy val coreSettings = plugins.JvmPlugin.projectSettings ++ Seq(
   libgdxVersion := "1.9.6",
-    akkaVersion := "2.5.11",
+    akkaVersion := "2.5.14",
   libraryDependencies ++= Seq(
     "com.badlogicgames.gdx" % "gdx" % libgdxVersion.value,
     "com.badlogicgames.gdx" % "gdx-box2d" % libgdxVersion.value,

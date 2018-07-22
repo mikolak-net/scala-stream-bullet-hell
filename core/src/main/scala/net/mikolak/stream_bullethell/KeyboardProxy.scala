@@ -20,7 +20,6 @@ class KeyboardProxy(outActor: ActorRef) extends InputAdapter {
   }
 }
 
-
 sealed trait KeyboardInput
 case class KeyUp(keycode: Int) extends KeyboardInput
 case class KeyDown(keycode: Int) extends KeyboardInput

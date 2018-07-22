@@ -2,7 +2,16 @@ package net.mikolak.stream_bullethell
 
 import akka.NotUsed
 import akka.actor.{ActorRef, ActorSystem}
-import akka.stream.scaladsl.{Broadcast, Flow, GraphDSL, Keep, Sink, SinkQueueWithCancel, Source, ZipN}
+import akka.stream.scaladsl.{
+  Broadcast,
+  Flow,
+  GraphDSL,
+  Keep,
+  Sink,
+  SinkQueueWithCancel,
+  Source,
+  ZipN
+}
 import akka.stream._
 import com.badlogic.gdx.Input.Keys
 import com.badlogic.gdx.graphics.g2d.{BitmapFont, SpriteBatch}
@@ -150,22 +159,17 @@ class MainScreen extends ScreenAdapter {
 
     import travesty.registry._
 
-
     val graph =
-      tickSource.↓
-        .zipWithMat(
-          inputSource.↓
-            .batch(bufferSize, List(_))(_ :+ _).↓
-            .prepend(Source.single(List.empty[KeyboardInput]).↓).↓
-            .expand(elem => 
-              Iterator.single(elem) ++ Iterator.continually(List.empty[KeyboardInput])).↓
-        )((gs, es) => gs.copy(events = es))(Keep.both)
+      tickSource.↓.zipWithMat(
+        inputSource.↓.batch(bufferSize, List(_))(_ :+ _).↓.prepend(
+          Source.single(List.empty[KeyboardInput]).↓).↓.expand(elem =>
+          Iterator.single(elem) ++ Iterator.continually(List.empty[KeyboardInput])).↓
+      )((gs, es) => gs.copy(events = es))(Keep.both)
         .via(setUpLogic(List(generator, mover, worldUpdater, tickIncrementer, inputHandler)).↓)
         .toMat(Sink.queue())(Keep.both)
 
-
 //    println(net.mikolak.travesty.toString(graph, Text))
-    net.mikolak.travesty.toFile(graph, SVG,  net.mikolak.travesty.TopToBottom)("/tmp/gamegraph.svg")
+    net.mikolak.travesty.toFile(graph, SVG, net.mikolak.travesty.TopToBottom)("/tmp/gamegraph.svg")
 
     val ((sourceActor, inputActor), sinkQueue) = graph.run()
 
