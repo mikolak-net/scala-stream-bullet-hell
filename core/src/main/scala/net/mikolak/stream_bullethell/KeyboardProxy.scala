@@ -15,7 +15,7 @@ class KeyboardProxy(outActor: ActorRef) extends InputAdapter {
   }
 
   override def keyDown(keycode: Int) = {
-    outActor ! KeyUp(keycode)
+    outActor ! KeyDown(keycode)
     true
   }
 }
