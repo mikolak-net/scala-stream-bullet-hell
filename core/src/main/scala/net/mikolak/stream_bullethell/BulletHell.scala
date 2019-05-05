@@ -55,6 +55,7 @@ class MainScreen extends ScreenAdapter {
 
   type Action = () => Unit
   type ActionQueue = SinkQueueWithCancel[Seq[Action]]
+  type ~~>[-A, +B] = PartialFunction[A, B]
 
   lazy val camera = new OrthographicCamera()
   val batch: SpriteBatch = new SpriteBatch()
@@ -131,28 +132,59 @@ class MainScreen extends ScreenAdapter {
       }
     }
 
-    val inputHandler = (g: GameState) => { () =>
-      {
-        for {
-          playerBody <- g.bodies.find(_.getUserData == Player)
-          e <- g.events
-        } {
-          val inputMults = e match {
-            case KeyUp(keycode) =>
-              keycode match {
-                case Keys.LEFT  => (-1f, 0f)
-                case Keys.RIGHT => (1f, 0f)
-                case Keys.UP    => (0f, 1f)
-                case Keys.DOWN  => (0f, -1f)
-                case _          => (0f, 0f)
-              }
-            case _ => (0f, 0f)
-          }
-
-          val v = (new Vector2(_: Float, _: Float)).tupled(inputMults).scl(1000f)
-          playerBody.applyForceToCenter(v, true)
-        }
+    val controlHandler = (g: GameState) => {
+      val PlayerSpeed = 1000f
+      val KeyMultipliers: KeyboardInput ~~> (Float, Float) = {
+        case KeyUp(Keys.LEFT)  => (-1f, 0f)
+        case KeyUp(Keys.RIGHT) => (1f, 0f)
+        case KeyUp(Keys.UP)    => (0f, 1f)
+        case KeyUp(Keys.DOWN)  => (0f, -1f)
       }
+
+      () =>
+        {
+          for {
+            playerBody <- g.bodies.find(_.getUserData == Player)
+            e <- g.events.filter(KeyMultipliers.isDefinedAt)
+          } {
+            val inputMults = KeyMultipliers(e)
+            val v = (new Vector2(_: Float, _: Float)).tupled(inputMults).scl(PlayerSpeed)
+            playerBody.applyForceToCenter(v, true)
+          }
+        }
+    }
+
+    val shootUiHandler = (g: GameState) => {
+      val ProjectileSpeed = 2000f
+      val SpacingOffsetScale = 1.1f
+      val KeyMultipliers: KeyboardInput ~~> (Float, Float) = {
+        case KeyUp(Keys.A) => (-1f, 0f)
+        case KeyUp(Keys.D) => (1f, 0f)
+        case KeyUp(Keys.W) => (0f, 1f)
+        case KeyUp(Keys.S) => (0f, -1f)
+      }
+
+      () =>
+        {
+          for {
+            playerBody <- g.bodies.find(_.getUserData == Player)
+            e <- g.events.filter(KeyMultipliers.isDefinedAt)
+          } {
+            val inputMults = KeyMultipliers(e)
+
+            val dirVector = (new Vector2(_: Float, _: Float)).tupled(inputMults)
+
+            val offsetLoc = dirVector
+              .cpy()
+              .scl(playerBody.getFixtureList.first().getShape.getRadius)
+              .scl(SpacingOffsetScale)
+
+            val v = (new Vector2(_: Float, _: Float)).tupled(inputMults).scl(ProjectileSpeed)
+            createSphere(playerBody.getWorldCenter.cpy.add(offsetLoc),
+                         Projectile,
+                         initialVelocity = v)
+          }
+        }
     }
 
     val bufferSize = 100
@@ -161,14 +193,17 @@ class MainScreen extends ScreenAdapter {
 
     val graph =
       tickSource.↓.zipWithMat(
-        inputSource.↓.batch(bufferSize, List(_))(_ :+ _).↓.extrapolate(_ =>
-          Iterator.continually(List.empty[KeyboardInput]), Some(List.empty[KeyboardInput])).↓
+        inputSource.↓.batch(bufferSize, List(_))(_ :+ _).↓.extrapolate(
+          _ => Iterator.continually(List.empty[KeyboardInput]),
+          Some(List.empty[KeyboardInput])).↓
       )((gs, es) => gs.copy(events = es))(Keep.both)
-        .via(setUpLogic(List(generator, mover, worldUpdater, tickIncrementer, inputHandler)).↓)
+        .via(setUpLogic(
+          List(generator, mover, worldUpdater, tickIncrementer, controlHandler, shootUiHandler)).↓)
         .toMat(Sink.queue())(Keep.both)
 
-//    println(net.mikolak.travesty.toString(graph, Text))
-    net.mikolak.travesty.toFile(graph, SVG, net.mikolak.travesty.TopToBottom)("/tmp/gamegraph.svg")
+    // Enable if you want graph:
+    //println(net.mikolak.travesty.toString(graph, Text))
+    //net.mikolak.travesty.toFile(graph, SVG, net.mikolak.travesty.TopToBottom)("/tmp/gamegraph.svg")
 
     val ((sourceActor, inputActor), sinkQueue) = graph.run()
 
@@ -193,7 +228,10 @@ class MainScreen extends ScreenAdapter {
       FlowShape(scatter.in, gather.out)
     })
 
-  private def createSphere(center: Vector2, bodyType: BodyType, radius: Float = 1) = {
+  private def createSphere(center: Vector2,
+                           bodyType: BodyType,
+                           radius: Float = 1,
+                           initialVelocity: Vector2 = Vector2.Zero) = {
     val bodyDef = new BodyDef
     bodyDef.`type` = BodyType.DynamicBody
     bodyDef.position.set(center)
@@ -209,6 +247,10 @@ class MainScreen extends ScreenAdapter {
     body.createFixture(fixtureDef)
     fixtureDef.shape.dispose()
     body.setUserData(bodyType)
+
+    if (initialVelocity != Vector2.Zero) {
+      body.setLinearVelocity(initialVelocity)
+    }
   }
 
   override def render(delta: TickDelta) = {
