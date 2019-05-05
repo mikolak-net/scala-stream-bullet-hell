@@ -16,7 +16,7 @@ lazy val desktopJarName = SettingKey[String]("desktop-jar-name", "name of JAR fi
 
 
 version := "0.1"
-scalaVersion := "2.12.4"
+scalaVersion := "2.12.8"
 
 
 lazy val coreSettings = plugins.JvmPlugin.projectSettings ++ Seq(
