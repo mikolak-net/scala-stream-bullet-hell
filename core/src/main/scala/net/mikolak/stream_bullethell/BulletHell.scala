@@ -2,6 +2,7 @@ package net.mikolak.stream_bullethell
 
 import akka.NotUsed
 import akka.actor.{ActorRef, ActorSystem}
+import akka.stream._
 import akka.stream.scaladsl.{
   Broadcast,
   Flow,
@@ -12,7 +13,6 @@ import akka.stream.scaladsl.{
   Source,
   ZipN
 }
-import akka.stream._
 import com.badlogic.gdx.Input.Keys
 import com.badlogic.gdx.graphics.g2d.{BitmapFont, SpriteBatch}
 import com.badlogic.gdx.graphics.{GL20, OrthographicCamera}
@@ -20,20 +20,16 @@ import com.badlogic.gdx.math.Vector2
 import com.badlogic.gdx.physics.box2d.BodyDef.BodyType
 import com.badlogic.gdx.physics.box2d._
 import com.badlogic.gdx.{Game, Gdx, ScreenAdapter}
-import com.badlogic.gdx.utils.{Array => ArrayGdx}
-import net.mikolak
-import net.mikolak.stream_bullethell.config.world
+import net.mikolak.stream_bullethell.components._
+import net.mikolak.stream_bullethell.contactSyntax._
+import net.mikolak.stream_bullethell.entity.Entity
 import net.mikolak.travesty
-import net.mikolak.travesty.OutputFormat.SVG
-import net.mikolak.travesty.TextFormat.Text
-import travesty.registry._
+import net.mikolak.travesty.registry._
 
-import scala.collection.JavaConverters._
 import scala.concurrent.duration.Duration
-import scala.util.Random
 import scala.reflect.runtime.universe._
-
-import contactSyntax._
+import scala.util.Random
+import cats.implicits._
 
 object config {
   object world {
@@ -88,7 +84,9 @@ class MainScreen extends ScreenAdapter {
   var tickActor: Option[ActorRef] = None
   var actionQueue: Option[ActionQueue] = None
 
-  lazy val world = new World(new Vector2(0, 0), false)
+  implicit lazy val world = new World(new Vector2(0, 0), false)
+  val worldEntity: Entity = Entity()
+  val entities: collection.mutable.Buffer[Entity] = collection.mutable.Buffer.empty[Entity]
 
   val debugRenderer = new Box2DDebugRenderer()
 
@@ -101,20 +99,32 @@ class MainScreen extends ScreenAdapter {
   override def show() = {
     camera.setToOrtho(false, config.world.Width.size, config.world.Height.size)
 
-    val generator = (g: GameState) => { () =>
+    val generator: GameState => Action = (g: GameState) => { () =>
       {
-        if (g.bodies.isEmpty) {
+        if (g.entities.isEmpty) {
           for (_ <- 1 to config.world.gen.NumCircles) {
             val randomLocation = new Vector2(Random.nextInt(config.world.Width.size),
                                              Random.nextInt(config.world.Height.size))
-            createSphere(randomLocation, Enemy)
+            val enemyEntity = Entity()
+            val body = BodyComponent.sphere(enemyEntity, randomLocation)
+            enemyEntity.update(body)
+            enemyEntity.update(Allegiance.enemy).update(Health(20))
+            g.entities.append(enemyEntity)
           }
 
           //player body
-          createSphere(new Vector2(config.world.Width.size, config.world.Height.size).scl(0.5f),
-                       Player,
-                       radius = 2f)
+          val playerEntity = Entity()
+          val body = BodyComponent.sphere(
+            playerEntity,
+            new Vector2(config.world.Width.size, config.world.Height.size).scl(0.5f),
+            radius = 2f)
+          playerEntity.update(body)
+          playerEntity.update(Allegiance.player)
+          playerEntity.update(Controllable(1000f))
+          g.entities.append(playerEntity)
         }
+
+        ()
       }
     }
 
@@ -124,9 +134,12 @@ class MainScreen extends ScreenAdapter {
 
       () =>
         {
-          for (body <- g.bodies if body.getUserData == Enemy) {
+          for (entity <- g.entities if entity.get[Allegiance].contains(Enemy)) {
             if (tick % gen.ForceApplyTickInterval == 0) {
-              body.applyForceToCenter(randomForceComponent, randomForceComponent, true)
+              entity
+                .get[BodyComponent]
+                .foreach(
+                  _.body.applyForceToCenter(randomForceComponent, randomForceComponent, true))
             }
           }
         }
@@ -145,7 +158,6 @@ class MainScreen extends ScreenAdapter {
     }
 
     val controlHandler = (g: GameState) => {
-      val PlayerSpeed = 1000f
       val KeyMultipliers: KeyboardInput ~~> (Float, Float) = {
         case KeyUp(Keys.LEFT)  => (-1f, 0f)
         case KeyUp(Keys.RIGHT) => (1f, 0f)
@@ -156,12 +168,14 @@ class MainScreen extends ScreenAdapter {
       () =>
         {
           for {
-            playerBody <- g.bodies.find(_.getUserData == Player)
+            playerEntity <- g.entities.find(_.has[Controllable])
             e <- g.keyEvents.filter(KeyMultipliers.isDefinedAt)
+            bodyComponent <- playerEntity.get[BodyComponent]
+            controllable <- playerEntity.get[Controllable]
           } {
             val inputMults = KeyMultipliers(e)
-            val v = (new Vector2(_: Float, _: Float)).tupled(inputMults).scl(PlayerSpeed)
-            playerBody.applyForceToCenter(v, true)
+            val v = (new Vector2(_: Float, _: Float)).tupled(inputMults).scl(controllable.speed)
+            bodyComponent.body.applyForceToCenter(v, true)
           }
         }
     }
@@ -179,7 +193,8 @@ class MainScreen extends ScreenAdapter {
       () =>
         {
           for {
-            playerBody <- g.bodies.find(_.getUserData == Player)
+            playerEntity <- g.entities.find(_.get[Allegiance].contains(Player))
+            playerBody <- playerEntity.get[BodyComponent]
             e <- g.keyEvents.filter(KeyMultipliers.isDefinedAt)
           } {
             val inputMults = KeyMultipliers(e)
@@ -188,14 +203,18 @@ class MainScreen extends ScreenAdapter {
 
             val offsetLoc = dirVector
               .cpy()
-              .scl(playerBody.getFixtureList.first().getShape.getRadius)
+              .scl(playerBody.body.getFixtureList.first().getShape.getRadius)
               .scl(SpacingOffsetScale)
 
             val v = (new Vector2(_: Float, _: Float)).tupled(inputMults).scl(ProjectileSpeed)
-            createSphere(playerBody.getWorldCenter.cpy.add(offsetLoc),
-                         Projectile,
-                         initialVelocity = v,
-                         bodyType = BodyType.KinematicBody)
+            val projectileEntity = Entity()
+            val projectileBody = BodyComponent.sphere(
+              projectileEntity,
+              playerBody.body.getWorldCenter.cpy.add(offsetLoc),
+              initialVelocity = v,
+              bodyType = BodyType.KinematicBody)
+            projectileEntity.update(projectileBody).update(Projectile(10)).update(Health(10))
+            g.entities.append(projectileEntity)
           }
         }
     }
@@ -204,14 +223,32 @@ class MainScreen extends ScreenAdapter {
       {
         for {
           collision <- g.contactEvents.flatMap(
-            _.contact.filterBodies(_.getUserData == Enemy, _.getUserData == Projectile).toList)
+            _.contact
+              .filterBodies(_.entity.has[Projectile], _.entity.get[Allegiance].contains(Enemy))
+              .toList)
+          (projectile, enemy) = collision.bimap(_.entity, _.entity)
+          projectileSpec <- projectile.get[Projectile]
+          projectileHp <- projectile.get[Health]
+          enemyHp <- enemy.get[Health]
         } {
-          world.destroyBody(collision._1)
-          world.destroyBody(collision._2)
+
+          enemy.update(enemyHp.copy(enemyHp.hp - projectileSpec.dmg))
+          projectile.update(projectileHp.copy(projectileHp.hp - projectileSpec.dmg))
+
           println("BUMP!!")
         }
       }
 
+    }
+
+    val destructionHandler = (g: GameState) => { () =>
+      for {
+        healthEntity <- g.entities.filter(_.has[Health])
+        hp <- healthEntity.get[Health] if hp.hp <= 0
+      } {
+        healthEntity.get[BodyComponent].foreach(b => world.destroyBody(b.body))
+        entities.remove(entities.indexOf(healthEntity))
+      }
     }
 
     val graph =
@@ -227,7 +264,8 @@ class MainScreen extends ScreenAdapter {
                  tickIncrementer,
                  controlHandler,
                  shootUiHandler,
-                 shootCollisionHandler)).↓)
+                 shootCollisionHandler,
+                 destructionHandler)).↓)
         .toMat(Sink.queue())(Keep.both)
 
     // Enable if you want graph:
@@ -243,7 +281,7 @@ class MainScreen extends ScreenAdapter {
   }
 
   private def setUpLogic(
-      elements: List[(GameState) => Action]): Flow[GameState, Seq[Action], NotUsed] =
+      elements: List[GameState => Action]): Flow[GameState, Seq[Action], NotUsed] =
     Flow.fromGraph(GraphDSL.create() { implicit b =>
       import GraphDSL.Implicits._
       val scatter = b.add(Broadcast[GameState](elements.size))
@@ -258,37 +296,11 @@ class MainScreen extends ScreenAdapter {
       FlowShape(scatter.in, gather.out)
     })
 
-  private def createSphere(center: Vector2,
-                           entityType: EntityType,
-                           radius: Float = 1,
-                           initialVelocity: Vector2 = Vector2.Zero,
-                           bodyType: BodyType = BodyType.DynamicBody) = {
-    val bodyDef = new BodyDef
-    bodyDef.`type` = bodyType
-    bodyDef.position.set(center)
-
-    val circle = new CircleShape()
-    circle.setRadius(radius)
-
-    val fixtureDef = new FixtureDef()
-    fixtureDef.shape = circle
-    fixtureDef.density = 1f
-
-    val body = world.createBody(bodyDef)
-    body.createFixture(fixtureDef)
-    fixtureDef.shape.dispose()
-    body.setUserData(entityType)
-
-    if (initialVelocity != Vector2.Zero) {
-      body.setLinearVelocity(initialVelocity)
-    }
-  }
-
   override def render(delta: TickDelta) = {
     tickActor.foreach { actor =>
-      val bodyArray = ArrayGdx.of(classOf[Body])
-      world.getBodies(bodyArray)
-      actor ! GameState(delta, bodyArray.asScala.toList)
+//      val bodyArray = ArrayGdx.of(classOf[Body])
+//      world.getBodies(bodyArray)
+      actor ! GameState(delta, entities, worldEntity)
     }
 
     import scala.concurrent.Await.result
@@ -317,7 +329,8 @@ class MainScreen extends ScreenAdapter {
 }
 
 case class GameState(delta: TickDelta,
-                     bodies: List[Body],
+                     entities: collection.mutable.Buffer[Entity],
+                     worldEntity: Entity,
                      keyEvents: List[KeyboardInput] = List.empty,
                      contactEvents: List[ContactEvent] = List.empty)
 

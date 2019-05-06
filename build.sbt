@@ -25,7 +25,8 @@ lazy val coreSettings = plugins.JvmPlugin.projectSettings ++ Seq(
   libraryDependencies ++= Seq(
     "com.badlogicgames.gdx" % "gdx" % libgdxVersion.value,
     "com.badlogicgames.gdx" % "gdx-box2d" % libgdxVersion.value,
-    "net.mikolak" %% "travesty" % s"0.9_${akkaVersion.value}"
+    "net.mikolak" %% "travesty" % s"0.9_${akkaVersion.value}",
+    "org.typelevel" %% "cats-core" % "2.0.0-M1"
   )  ++
     Seq("akka-stream"
     ).map("com.typesafe.akka" %% _ % akkaVersion.value),
@@ -46,7 +47,8 @@ lazy val coreSettings = plugins.JvmPlugin.projectSettings ++ Seq(
     "-deprecation",
     "-feature",
     "-encoding", "UTF-8",
-    "-target:jvm-1.8"
+    "-target:jvm-1.8",
+    "-Ypartial-unification"
   ),
   cancelable := true,
   exportJars := true,

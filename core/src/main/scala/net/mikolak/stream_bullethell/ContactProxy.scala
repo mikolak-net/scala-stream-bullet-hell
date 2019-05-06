@@ -2,6 +2,7 @@ package net.mikolak.stream_bullethell
 
 import akka.actor.ActorRef
 import com.badlogic.gdx.physics.box2d.{Body, Contact, ContactImpulse, ContactListener, Manifold}
+import net.mikolak.stream_bullethell.entity.Entity
 
 class ContactProxy(outActor: ActorRef) extends ContactListener {
   override def beginContact(contact: Contact): Unit = outActor ! BeginContact(contact)
@@ -35,5 +36,9 @@ object contactSyntax {
           None
         }
       }
+  }
+
+  implicit class BodyOps(val body: Body) extends AnyVal {
+    def entity: Entity = body.getUserData.asInstanceOf[Entity]
   }
 }
