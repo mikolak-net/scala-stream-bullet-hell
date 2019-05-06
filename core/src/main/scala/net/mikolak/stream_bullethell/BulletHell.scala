@@ -26,10 +26,14 @@ import net.mikolak.stream_bullethell.config.world
 import net.mikolak.travesty
 import net.mikolak.travesty.OutputFormat.SVG
 import net.mikolak.travesty.TextFormat.Text
+import travesty.registry._
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.Duration
 import scala.util.Random
+import scala.reflect.runtime.universe._
+
+import contactSyntax._
 
 object config {
   object world {
@@ -72,7 +76,15 @@ class MainScreen extends ScreenAdapter {
       .withSupervisionStrategy(loggingDecider))
 
   val tickSource = Source.actorRef[GameState](bufferSize = 1, OverflowStrategy.dropNew)
-  val inputSource = Source.actorRef[KeyboardInput](bufferSize = 0, OverflowStrategy.dropTail)
+
+  // format: off
+  private def batchedLazySource[T: TypeTag](batchBufferSize: Int = 100): Source[List[T], ActorRef] =
+    Source
+      .actorRef[T](bufferSize = 0, OverflowStrategy.dropTail).↓
+      .batch(batchBufferSize, List(_))(_ :+ _).↓
+      .extrapolate(_ => Iterator.continually(List.empty[T]), Some(List.empty[T])).↓
+  // format: on
+
   var tickActor: Option[ActorRef] = None
   var actionQueue: Option[ActionQueue] = None
 
@@ -145,7 +157,7 @@ class MainScreen extends ScreenAdapter {
         {
           for {
             playerBody <- g.bodies.find(_.getUserData == Player)
-            e <- g.events.filter(KeyMultipliers.isDefinedAt)
+            e <- g.keyEvents.filter(KeyMultipliers.isDefinedAt)
           } {
             val inputMults = KeyMultipliers(e)
             val v = (new Vector2(_: Float, _: Float)).tupled(inputMults).scl(PlayerSpeed)
@@ -156,7 +168,7 @@ class MainScreen extends ScreenAdapter {
 
     val shootUiHandler = (g: GameState) => {
       val ProjectileSpeed = 2000f
-      val SpacingOffsetScale = 1.1f
+      val SpacingOffsetScale = 1.2f
       val KeyMultipliers: KeyboardInput ~~> (Float, Float) = {
         case KeyUp(Keys.A) => (-1f, 0f)
         case KeyUp(Keys.D) => (1f, 0f)
@@ -168,7 +180,7 @@ class MainScreen extends ScreenAdapter {
         {
           for {
             playerBody <- g.bodies.find(_.getUserData == Player)
-            e <- g.events.filter(KeyMultipliers.isDefinedAt)
+            e <- g.keyEvents.filter(KeyMultipliers.isDefinedAt)
           } {
             val inputMults = KeyMultipliers(e)
 
@@ -182,34 +194,52 @@ class MainScreen extends ScreenAdapter {
             val v = (new Vector2(_: Float, _: Float)).tupled(inputMults).scl(ProjectileSpeed)
             createSphere(playerBody.getWorldCenter.cpy.add(offsetLoc),
                          Projectile,
-                         initialVelocity = v)
+                         initialVelocity = v,
+                         bodyType = BodyType.KinematicBody)
           }
         }
     }
 
-    val bufferSize = 100
+    val shootCollisionHandler = (g: GameState) => { () =>
+      {
+        for {
+          collision <- g.contactEvents.flatMap(
+            _.contact.filterBodies(_.getUserData == Enemy, _.getUserData == Projectile).toList)
+        } {
+          world.destroyBody(collision._1)
+          world.destroyBody(collision._2)
+          println("BUMP!!")
+        }
+      }
 
-    import travesty.registry._
+    }
 
     val graph =
       tickSource.↓.zipWithMat(
-        inputSource.↓.batch(bufferSize, List(_))(_ :+ _).↓.extrapolate(
-          _ => Iterator.continually(List.empty[KeyboardInput]),
-          Some(List.empty[KeyboardInput])).↓
-      )((gs, es) => gs.copy(events = es))(Keep.both)
-        .via(setUpLogic(
-          List(generator, mover, worldUpdater, tickIncrementer, controlHandler, shootUiHandler)).↓)
+        batchedLazySource[KeyboardInput]()
+      )((gs, es) => gs.copy(keyEvents = es))(Keep.both).↓.zipWithMat( //TODO: generalize
+        batchedLazySource[ContactEvent]())((gs, cs) => gs.copy(contactEvents = cs))(Keep.both)
+        .via(
+          setUpLogic(
+            List(generator,
+                 mover,
+                 worldUpdater,
+                 tickIncrementer,
+                 controlHandler,
+                 shootUiHandler,
+                 shootCollisionHandler)).↓)
         .toMat(Sink.queue())(Keep.both)
 
     // Enable if you want graph:
     //println(net.mikolak.travesty.toString(graph, Text))
     //net.mikolak.travesty.toFile(graph, SVG, net.mikolak.travesty.TopToBottom)("/tmp/gamegraph.svg")
 
-    val ((sourceActor, inputActor), sinkQueue) = graph.run()
+    val (((sourceActor, inputActor), contactActor), sinkQueue) = graph.run()
 
     tickActor = Some(sourceActor)
     actionQueue = Some(sinkQueue)
     Gdx.input.setInputProcessor(new KeyboardProxy(inputActor))
+    world.setContactListener(new ContactProxy(contactActor))
   }
 
   private def setUpLogic(
@@ -229,11 +259,12 @@ class MainScreen extends ScreenAdapter {
     })
 
   private def createSphere(center: Vector2,
-                           bodyType: BodyType,
+                           entityType: EntityType,
                            radius: Float = 1,
-                           initialVelocity: Vector2 = Vector2.Zero) = {
+                           initialVelocity: Vector2 = Vector2.Zero,
+                           bodyType: BodyType = BodyType.DynamicBody) = {
     val bodyDef = new BodyDef
-    bodyDef.`type` = BodyType.DynamicBody
+    bodyDef.`type` = bodyType
     bodyDef.position.set(center)
 
     val circle = new CircleShape()
@@ -246,7 +277,7 @@ class MainScreen extends ScreenAdapter {
     val body = world.createBody(bodyDef)
     body.createFixture(fixtureDef)
     fixtureDef.shape.dispose()
-    body.setUserData(bodyType)
+    body.setUserData(entityType)
 
     if (initialVelocity != Vector2.Zero) {
       body.setLinearVelocity(initialVelocity)
@@ -285,7 +316,10 @@ class MainScreen extends ScreenAdapter {
     actorSystem.terminate()
 }
 
-case class GameState(delta: TickDelta, bodies: List[Body], events: List[KeyboardInput] = List.empty)
+case class GameState(delta: TickDelta,
+                     bodies: List[Body],
+                     keyEvents: List[KeyboardInput] = List.empty,
+                     contactEvents: List[ContactEvent] = List.empty)
 
 case class Dim(d: Float) extends AnyVal {
   def size = d.toInt
