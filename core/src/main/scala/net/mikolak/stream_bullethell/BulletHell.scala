@@ -46,7 +46,8 @@ object config {
   object world {
     object gen {
       object enemies {
-        val MaxSpawned = 5
+        val StartSpawned = 5
+        val NewSpawnEveryMs = 20000
         val StartHealth = 20
         val ContactDamage = 20
         val MoveForce = 100
@@ -142,15 +143,21 @@ class MainScreen extends ScreenAdapter {
       import config.world.gen.enemies._
       () =>
         {
-          for (_ <- g.entities.count(_.get[Allegiance].exists(_ == Enemy)) to config.world.gen.enemies.MaxSpawned) {
-            val randomLocation = new Vector2(Random.nextInt(config.world.Width.size),
-                                             Random.nextInt(config.world.Height.size))
-            val enemyEntity = Entity()
-            val body = BodyComponent.sphere(enemyEntity, randomLocation)
-            enemyEntity.update(body)
-            enemyEntity.update(Allegiance.enemy).update(Health(StartHealth))
-            enemyEntity.update(ContactDamaging(ContactDamage))
-            g.entities.append(enemyEntity)
+
+          for {
+            startTime <- g.globalEntity.get[global.StartTime]
+          } {
+            val targetSpawned = StartSpawned + (startTime.timeSurvivedInMs / NewSpawnEveryMs).toInt
+            for (_ <- g.entities.count(_.get[Allegiance].exists(_ == Enemy)) to targetSpawned) {
+              val randomLocation = new Vector2(Random.nextInt(config.world.Width.size),
+                                               Random.nextInt(config.world.Height.size))
+              val enemyEntity = Entity()
+              val body = BodyComponent.sphere(enemyEntity, randomLocation)
+              enemyEntity.update(body)
+              enemyEntity.update(Allegiance.enemy).update(Health(StartHealth))
+              enemyEntity.update(ContactDamaging(ContactDamage))
+              g.entities.append(enemyEntity)
+            }
           }
         }
     }
