@@ -1,5 +1,7 @@
 package net.mikolak.stream_bullethell
 
+import java.time.Instant
+
 import akka.NotUsed
 import akka.actor.{ActorRef, ActorSystem}
 import akka.stream._
@@ -31,16 +33,24 @@ import scala.reflect.runtime.universe._
 import scala.util.Random
 import cats.instances.tuple._
 import cats.syntax.bifunctor._
+import net.mikolak.stream_bullethell.components.global.HighScore
 
 object config {
+
+  object scoring {
+    val PointsPerDestroyed = 10
+    val PointPerTimeUnitSurvived = 1
+    val TimeUnitSurvivedInMs = 10000
+  }
+
   object world {
     object gen {
       object enemies {
         val MaxSpawned = 5
         val StartHealth = 20
         val ContactDamage = 20
-        val MoveForce = 600
-        val ForceApplyTickInterval = 100
+        val MoveForce = 100
+        val ForceApplyTickInterval = 10
       }
     }
 
@@ -90,7 +100,7 @@ class MainScreen extends ScreenAdapter {
   var actionQueue: Option[ActionQueue] = None
 
   implicit lazy val world = new World(new Vector2(0, 0), false)
-  val worldEntity: Entity = Entity()
+  val globalEntity: Entity = Entity()
   val entities: collection.mutable.Buffer[Entity] = collection.mutable.Buffer.empty[Entity]
 
   val debugRenderer = new Box2DDebugRenderer()
@@ -118,6 +128,10 @@ class MainScreen extends ScreenAdapter {
           playerEntity.update(Controllable(1000f))
           playerEntity.update(Health(200))
           g.entities.append(playerEntity)
+
+          g.globalEntity.update(global.HighScore(0))
+          g.globalEntity.update(global.StartTime(System.currentTimeMillis()))
+          g.globalEntity.update(global.DestroyedAmount(0))
         }
 
         ()
@@ -282,10 +296,32 @@ class MainScreen extends ScreenAdapter {
       for {
         healthEntity <- g.entities.filter(_.has[Health])
         if healthEntity.get[Health].exists(_.hp <= 0)
+        bodyComponent <- healthEntity.get[BodyComponent]
       } {
-        healthEntity.get[BodyComponent].foreach(b => world.destroyBody(b.body))
+        world.destroyBody(bodyComponent.body)
         entities.remove(entities.indexOf(healthEntity))
+
+        //TODO: change into event model for creation/destruction so this can be split
+        if (healthEntity.get[Allegiance].contains(Enemy)) {
+          g.globalEntity.updateWith[global.DestroyedAmount](amount =>
+            amount.copy(amount.amount + 1))
+        }
       }
+    }
+
+    val highScoreCounter = (g: GameState) => {
+      import config.scoring._
+      () =>
+        for {
+          startTime <- g.globalEntity.get[global.StartTime]
+          destroyedAmount <- g.globalEntity.get[global.DestroyedAmount]
+        } {
+          val survivedPoints = (startTime.timeSurvivedInMs / TimeUnitSurvivedInMs).toInt * PointPerTimeUnitSurvived
+          val destroyedPoints = destroyedAmount.amount * PointsPerDestroyed
+
+          g.globalEntity.updateWith[global.HighScore](currentHs =>
+            currentHs.copy(survivedPoints + destroyedPoints))
+        }
     }
 
     val graph =
@@ -303,7 +339,8 @@ class MainScreen extends ScreenAdapter {
           shootUiHandler,
           shootCollisionHandler,
           contactDamageHandler,
-          destructionHandler
+          destructionHandler,
+          highScoreCounter
         )).↓)
         .toMat(Sink.queue())(Keep.both)
 
@@ -339,7 +376,7 @@ class MainScreen extends ScreenAdapter {
     tickActor.foreach { actor =>
 //      val bodyArray = ArrayGdx.of(classOf[Body])
 //      world.getBodies(bodyArray)
-      actor ! GameState(delta, entities, worldEntity)
+      actor ! GameState(delta, entities, globalEntity)
     }
 
     import scala.concurrent.Await.result
@@ -357,7 +394,8 @@ class MainScreen extends ScreenAdapter {
     camera.update()
     batch.setProjectionMatrix(camera.combined)
     batch.begin()
-    font.draw(batch, s"Tick: $tick", 0, font.getCapHeight)
+    val currentScore = globalEntity.get[global.HighScore].map(_.score).getOrElse(0)
+    font.draw(batch, s"Score: $currentScore", 0, font.getCapHeight)
     batch.end()
 
     debugRenderer.render(world, camera.combined)
@@ -369,7 +407,7 @@ class MainScreen extends ScreenAdapter {
 
 case class GameState(delta: TickDelta,
                      entities: collection.mutable.Buffer[Entity],
-                     worldEntity: Entity,
+                     globalEntity: Entity,
                      keyEvents: List[KeyboardInput] = List.empty,
                      contactEvents: List[ContactEvent] = List.empty)
 

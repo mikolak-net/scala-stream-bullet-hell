@@ -9,6 +9,7 @@ trait Entity {
   def update[T <: Component: ClassTag](c: T): Entity
   def drop[T <: Component: ClassTag]: Entity
   def has[T <: Component: ClassTag]: Boolean
+  def updateWith[T <: Component: ClassTag](f: T => T): Entity
 
 }
 
@@ -35,6 +36,11 @@ private class EntityImpl extends Entity {
 
   override def has[T <: Component](implicit cTag: ClassTag[T]): Boolean =
     cs.contains(cTag.runtimeClass)
+
+  override def updateWith[T <: Component](f: T => T)(implicit cTag: ClassTag[T]): Entity = {
+    get[T].foreach(current => update(f(current)))
+    this
+  }
 }
 
 trait Component {}

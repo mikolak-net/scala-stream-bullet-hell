@@ -1,5 +1,7 @@
 package net.mikolak.stream_bullethell
 
+import java.time.Instant
+
 import com.badlogic.gdx.math.Vector2
 import com.badlogic.gdx.physics.box2d.BodyDef.BodyType
 import com.badlogic.gdx.physics.box2d.{Body, BodyDef, CircleShape, FixtureDef, World}
@@ -46,5 +48,15 @@ object components {
   case class Projectile(dmg: Int) extends Component
   case class ContactDamaging(dmg: Int) extends Component
   case class Controllable(speed: Float) extends Component
+
+  object global {
+
+    case class HighScore(score: Int) extends Component
+    case class StartTime(startTs: Long) extends Component {
+      def timeSurvivedInMs: Long = System.currentTimeMillis() - startTs
+    }
+    case class DestroyedAmount(amount: Int) extends Component
+
+  }
 
 }
