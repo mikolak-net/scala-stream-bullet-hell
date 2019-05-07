@@ -29,7 +29,8 @@ import net.mikolak.travesty.registry._
 import scala.concurrent.duration.Duration
 import scala.reflect.runtime.universe._
 import scala.util.Random
-import cats.implicits._
+import cats.instances.tuple._
+import cats.syntax.bifunctor._
 
 object config {
   object world {
@@ -109,6 +110,7 @@ class MainScreen extends ScreenAdapter {
             val body = BodyComponent.sphere(enemyEntity, randomLocation)
             enemyEntity.update(body)
             enemyEntity.update(Allegiance.enemy).update(Health(20))
+            enemyEntity.update(ContactDamaging(20))
             g.entities.append(enemyEntity)
           }
 
@@ -121,6 +123,7 @@ class MainScreen extends ScreenAdapter {
           playerEntity.update(body)
           playerEntity.update(Allegiance.player)
           playerEntity.update(Controllable(1000f))
+          playerEntity.update(Health(200))
           g.entities.append(playerEntity)
         }
 
@@ -182,7 +185,7 @@ class MainScreen extends ScreenAdapter {
 
     val shootUiHandler = (g: GameState) => {
       val ProjectileSpeed = 2000f
-      val SpacingOffsetScale = 1.2f
+      val SpacingOffsetScale = 1.3f
       val KeyMultipliers: KeyboardInput ~~> (Float, Float) = {
         case KeyUp(Keys.A) => (-1f, 0f)
         case KeyUp(Keys.D) => (1f, 0f)
@@ -212,7 +215,8 @@ class MainScreen extends ScreenAdapter {
               projectileEntity,
               playerBody.body.getWorldCenter.cpy.add(offsetLoc),
               initialVelocity = v,
-              bodyType = BodyType.KinematicBody)
+              bodyType = BodyType.KinematicBody,
+              sensor = true)
             projectileEntity.update(projectileBody).update(Projectile(10)).update(Health(10))
             g.entities.append(projectileEntity)
           }
@@ -222,29 +226,48 @@ class MainScreen extends ScreenAdapter {
     val shootCollisionHandler = (g: GameState) => { () =>
       {
         for {
-          collision <- g.contactEvents.flatMap(
-            _.contact
-              .filterBodies(_.entity.has[Projectile], _.entity.get[Allegiance].contains(Enemy))
-              .toList)
-          (projectile, enemy) = collision.bimap(_.entity, _.entity)
+          (projectile, enemy) <- g.contactEvents
+            .filter(_.isInstanceOf[BeginContact])
+            .flatMap(
+              _.contact
+                .filterEntities(_.has[Projectile], _.get[Allegiance].contains(Enemy))
+                .toList)
           projectileSpec <- projectile.get[Projectile]
           projectileHp <- projectile.get[Health]
           enemyHp <- enemy.get[Health]
         } {
-
           enemy.update(enemyHp.copy(enemyHp.hp - projectileSpec.dmg))
           projectile.update(projectileHp.copy(projectileHp.hp - projectileSpec.dmg))
 
           println("BUMP!!")
         }
       }
+    }
 
+    val contactDamageHandler = (g: GameState) => { () =>
+      {
+        for {
+          (contactDamager, damaged) <- g.contactEvents
+            .filter(_.isInstanceOf[BeginContact])
+            .flatMap(
+              _.contact
+                .filterEntities(_.has[ContactDamaging], _.has[Health])
+                .toList)
+          if contactDamager.get[Allegiance].exists(a => damaged.get[Allegiance].exists(a != _))
+          dmg <- contactDamager.get[ContactDamaging].map(_.dmg)
+          health <- damaged.get[Health]
+          newHp = health.hp - dmg
+        } {
+          damaged.update(health.copy(newHp))
+          println(s"Contact damage: $newHp")
+        }
+      }
     }
 
     val destructionHandler = (g: GameState) => { () =>
       for {
         healthEntity <- g.entities.filter(_.has[Health])
-        hp <- healthEntity.get[Health] if hp.hp <= 0
+        if healthEntity.get[Health].exists(_.hp <= 0)
       } {
         healthEntity.get[BodyComponent].foreach(b => world.destroyBody(b.body))
         entities.remove(entities.indexOf(healthEntity))
@@ -265,6 +288,7 @@ class MainScreen extends ScreenAdapter {
                  controlHandler,
                  shootUiHandler,
                  shootCollisionHandler,
+                 contactDamageHandler,
                  destructionHandler)).↓)
         .toMat(Sink.queue())(Keep.both)
 
