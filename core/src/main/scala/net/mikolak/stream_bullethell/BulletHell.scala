@@ -36,7 +36,7 @@ object config {
   object world {
     object gen {
       val NumCircles = 3
-      val MaxForce = 300
+      val EnemyMoveForce = 600
       val ForceApplyTickInterval = 100
     }
 
@@ -131,19 +131,21 @@ class MainScreen extends ScreenAdapter {
       }
     }
 
-    val mover = (g: GameState) => {
+    val enemyAi = (g: GameState) => {
       import config.world.gen
-      def randomForceComponent = Random.nextInt(2 * gen.MaxForce) - gen.MaxForce
-
       () =>
         {
-          for (entity <- g.entities if entity.get[Allegiance].contains(Enemy)) {
-            if (tick % gen.ForceApplyTickInterval == 0) {
-              entity
-                .get[BodyComponent]
-                .foreach(
-                  _.body.applyForceToCenter(randomForceComponent, randomForceComponent, true))
-            }
+          for {
+            enemy <- g.entities
+            if enemy.get[Allegiance].contains(Enemy) && tick % gen.ForceApplyTickInterval == 0
+            player <- g.entities.find(_.get[Allegiance].exists(_ == Player))
+            playerBody <- player.get[BodyComponent]
+            enemyBody <- enemy.get[BodyComponent]
+          } {
+            val playerLocation = playerBody.body.getPosition
+            val enemyLocation = enemyBody.body.getPosition
+            val forceVector = playerLocation.cpy.sub(enemyLocation).setLength(gen.EnemyMoveForce)
+            enemyBody.body.applyForceToCenter(forceVector, true)
           }
         }
     }
@@ -282,7 +284,7 @@ class MainScreen extends ScreenAdapter {
         .via(
           setUpLogic(
             List(generator,
-                 mover,
+                 enemyAi,
                  worldUpdater,
                  tickIncrementer,
                  controlHandler,
