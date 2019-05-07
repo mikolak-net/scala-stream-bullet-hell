@@ -35,9 +35,13 @@ import cats.syntax.bifunctor._
 object config {
   object world {
     object gen {
-      val NumCircles = 3
-      val EnemyMoveForce = 600
-      val ForceApplyTickInterval = 100
+      object enemies {
+        val MaxSpawned = 5
+        val StartHealth = 20
+        val ContactDamage = 20
+        val MoveForce = 600
+        val ForceApplyTickInterval = 100
+      }
     }
 
     val Width = Dim(160)
@@ -100,20 +104,9 @@ class MainScreen extends ScreenAdapter {
   override def show() = {
     camera.setToOrtho(false, config.world.Width.size, config.world.Height.size)
 
-    val generator: GameState => Action = (g: GameState) => { () =>
+    val coreGenerator: GameState => Action = (g: GameState) => { () =>
       {
         if (g.entities.isEmpty) {
-          for (_ <- 1 to config.world.gen.NumCircles) {
-            val randomLocation = new Vector2(Random.nextInt(config.world.Width.size),
-                                             Random.nextInt(config.world.Height.size))
-            val enemyEntity = Entity()
-            val body = BodyComponent.sphere(enemyEntity, randomLocation)
-            enemyEntity.update(body)
-            enemyEntity.update(Allegiance.enemy).update(Health(20))
-            enemyEntity.update(ContactDamaging(20))
-            g.entities.append(enemyEntity)
-          }
-
           //player body
           val playerEntity = Entity()
           val body = BodyComponent.sphere(
@@ -131,20 +124,39 @@ class MainScreen extends ScreenAdapter {
       }
     }
 
+    val enemyGenerator: GameState => Action = (g: GameState) => {
+      import config.world.gen.enemies._
+      () =>
+        {
+          for (_ <- g.entities.count(_.get[Allegiance].exists(_ == Enemy)) to config.world.gen.enemies.MaxSpawned) {
+            val randomLocation = new Vector2(Random.nextInt(config.world.Width.size),
+                                             Random.nextInt(config.world.Height.size))
+            val enemyEntity = Entity()
+            val body = BodyComponent.sphere(enemyEntity, randomLocation)
+            enemyEntity.update(body)
+            enemyEntity.update(Allegiance.enemy).update(Health(StartHealth))
+            enemyEntity.update(ContactDamaging(ContactDamage))
+            g.entities.append(enemyEntity)
+          }
+        }
+    }
+
     val enemyAi = (g: GameState) => {
       import config.world.gen
       () =>
         {
           for {
             enemy <- g.entities
-            if enemy.get[Allegiance].contains(Enemy) && tick % gen.ForceApplyTickInterval == 0
+            if enemy
+              .get[Allegiance]
+              .contains(Enemy) && tick % gen.enemies.ForceApplyTickInterval == 0
             player <- g.entities.find(_.get[Allegiance].exists(_ == Player))
             playerBody <- player.get[BodyComponent]
             enemyBody <- enemy.get[BodyComponent]
           } {
             val playerLocation = playerBody.body.getPosition
             val enemyLocation = enemyBody.body.getPosition
-            val forceVector = playerLocation.cpy.sub(enemyLocation).setLength(gen.EnemyMoveForce)
+            val forceVector = playerLocation.cpy.sub(enemyLocation).setLength(gen.enemies.MoveForce)
             enemyBody.body.applyForceToCenter(forceVector, true)
           }
         }
@@ -281,17 +293,18 @@ class MainScreen extends ScreenAdapter {
         batchedLazySource[KeyboardInput]()
       )((gs, es) => gs.copy(keyEvents = es))(Keep.both).↓.zipWithMat( //TODO: generalize
         batchedLazySource[ContactEvent]())((gs, cs) => gs.copy(contactEvents = cs))(Keep.both)
-        .via(
-          setUpLogic(
-            List(generator,
-                 enemyAi,
-                 worldUpdater,
-                 tickIncrementer,
-                 controlHandler,
-                 shootUiHandler,
-                 shootCollisionHandler,
-                 contactDamageHandler,
-                 destructionHandler)).↓)
+        .via(setUpLogic(List(
+          coreGenerator,
+          enemyGenerator,
+          enemyAi,
+          worldUpdater,
+          tickIncrementer,
+          controlHandler,
+          shootUiHandler,
+          shootCollisionHandler,
+          contactDamageHandler,
+          destructionHandler
+        )).↓)
         .toMat(Sink.queue())(Keep.both)
 
     // Enable if you want graph:

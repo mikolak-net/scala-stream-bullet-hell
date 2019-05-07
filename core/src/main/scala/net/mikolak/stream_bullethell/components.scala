@@ -3,7 +3,6 @@ package net.mikolak.stream_bullethell
 import com.badlogic.gdx.math.Vector2
 import com.badlogic.gdx.physics.box2d.BodyDef.BodyType
 import com.badlogic.gdx.physics.box2d.{Body, BodyDef, CircleShape, FixtureDef, World}
-import net.mikolak.stream_bullethell.config.world
 import net.mikolak.stream_bullethell.entity.{Component, Entity}
 
 object components {
