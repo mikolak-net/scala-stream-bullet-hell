@@ -266,8 +266,9 @@ class MainScreen extends ScreenAdapter {
               projectileEntity,
               playerBody.body.getWorldCenter.cpy.add(offsetLoc),
               initialVelocity = v,
-              bodyType = BodyType.KinematicBody,
-              sensor = true)
+              bodyType = BodyType.DynamicBody,
+              bullet = true,
+              density = 0.0001f)
             projectileEntity
               .update(projectileBody)
               .update(Projectile(10))
