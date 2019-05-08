@@ -79,9 +79,6 @@ class MainScreen extends ScreenAdapter {
   type ActionQueue = SinkQueueWithCancel[Seq[Action]]
   type ~~>[-A, +B] = PartialFunction[A, B]
 
-  lazy val camera = new OrthographicCamera()
-  val batch: SpriteBatch = new SpriteBatch()
-
   var tick = 1L
 
   val loggingDecider: Supervision.Decider = { e =>
@@ -106,7 +103,7 @@ class MainScreen extends ScreenAdapter {
   var tickActor: Option[ActorRef] = None
   var actionQueue: Option[ActionQueue] = None
 
-  implicit lazy val world = new World(new Vector2(0, 0), false)
+  implicit lazy val world = new World(new Vector2(0, 0), false) //TODO: move to component
   val globalEntity: Entity = Entity()
   val entities: collection.mutable.Buffer[Entity] = collection.mutable.Buffer.empty[Entity]
 
@@ -119,8 +116,6 @@ class MainScreen extends ScreenAdapter {
   }
 
   override def show() = {
-    camera.setToOrtho(false, config.world.Width.size, config.world.Height.size)
-
     val coreGenerator: GameState => Action = (g: GameState) => { () =>
       {
         if (g.entities.isEmpty) {
@@ -415,6 +410,31 @@ class MainScreen extends ScreenAdapter {
         }
     }
 
+    val renderer = (g: GameState) => {
+      val camera = new OrthographicCamera()
+      lazy val batch: SpriteBatch = new SpriteBatch()
+      var initialized = false
+
+      () =>
+        {
+          if (!initialized) {
+            camera.setToOrtho(false, config.world.Width.size, config.world.Height.size)
+            initialized = true
+          }
+
+          Gdx.gl.glClearColor(0, 0, 0.5f, 1)
+          Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT)
+          camera.update()
+          batch.setProjectionMatrix(camera.combined)
+          batch.begin()
+          val currentScore = globalEntity.get[global.HighScore].map(_.score).getOrElse(0)
+          font.draw(batch, s"Score: $currentScore", 0, font.getCapHeight)
+          batch.end()
+
+          debugRenderer.render(world, camera.combined)
+        }
+    }
+
     val graph =
       tickSource.↓.zipWithMat(
         batchedLazySource[KeyboardInput]()
@@ -433,7 +453,8 @@ class MainScreen extends ScreenAdapter {
           destructionHandler,
           outOfBoundTeleportHandler,
           outOfBoundRemovalHandler,
-          highScoreCounter
+          highScoreCounter,
+          renderer
         )).↓)
         .toMat(Sink.queue())(Keep.both)
 
@@ -481,17 +502,6 @@ class MainScreen extends ScreenAdapter {
     } {
       a()
     }
-
-    Gdx.gl.glClearColor(0, 0, 0.5f, 1)
-    Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT)
-    camera.update()
-    batch.setProjectionMatrix(camera.combined)
-    batch.begin()
-    val currentScore = globalEntity.get[global.HighScore].map(_.score).getOrElse(0)
-    font.draw(batch, s"Score: $currentScore", 0, font.getCapHeight)
-    batch.end()
-
-    debugRenderer.render(world, camera.combined)
   }
 
   override def hide() =
