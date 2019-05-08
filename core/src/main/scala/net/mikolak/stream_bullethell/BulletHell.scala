@@ -16,8 +16,8 @@ import akka.stream.scaladsl.{
   ZipN
 }
 import com.badlogic.gdx.Input.Keys
-import com.badlogic.gdx.graphics.g2d.{BitmapFont, SpriteBatch}
-import com.badlogic.gdx.graphics.{GL20, OrthographicCamera}
+import com.badlogic.gdx.graphics.g2d.{BitmapFont, SpriteBatch, TextureRegion}
+import com.badlogic.gdx.graphics.{GL20, OrthographicCamera, Texture}
 import com.badlogic.gdx.math.{Rectangle, Vector2}
 import com.badlogic.gdx.physics.box2d.BodyDef.BodyType
 import com.badlogic.gdx.physics.box2d._
@@ -41,6 +41,10 @@ object config {
     val PointsPerDestroyed = 10
     val PointPerTimeUnitSurvived = 1
     val TimeUnitSurvivedInMs = 10000L
+  }
+
+  object display {
+    val SpriteScaling = 12 //TODO: dynamic, resolution-based scaling
   }
 
   object world {
@@ -124,7 +128,7 @@ class MainScreen extends ScreenAdapter {
           val body = BodyComponent.sphere(
             playerEntity,
             new Vector2(config.world.Width.size, config.world.Height.size).scl(0.5f),
-            radius = 2f)
+            radius = 3f)
           playerEntity.update(body)
           playerEntity.update(Allegiance.player)
           playerEntity.update(Controllable(1000f))
@@ -155,7 +159,7 @@ class MainScreen extends ScreenAdapter {
               val randomLocation = new Vector2(Random.nextInt(config.world.Width.size),
                                                Random.nextInt(config.world.Height.size))
               val enemyEntity = Entity()
-              val body = BodyComponent.sphere(enemyEntity, randomLocation)
+              val body = BodyComponent.sphere(enemyEntity, randomLocation, radius = 1.8f)
               enemyEntity.update(body)
               enemyEntity.update(Allegiance.enemy).update(Health(StartHealth))
               enemyEntity.update(ContactDamaging(ContactDamage))
@@ -221,10 +225,13 @@ class MainScreen extends ScreenAdapter {
             e <- g.keyEvents.filter(KeyMultipliers.isDefinedAt)
             bodyComponent <- playerEntity.get[BodyComponent]
             controllable <- playerEntity.get[Controllable]
+            body = bodyComponent.body
           } {
             val inputMults = KeyMultipliers(e)
-            val v = (new Vector2(_: Float, _: Float)).tupled(inputMults).scl(controllable.speed)
-            bodyComponent.body.applyForceToCenter(v, true)
+            val dirVector = (new Vector2(_: Float, _: Float)).tupled(inputMults)
+            val angle = dirVector.angleRad()
+            body.setTransform(body.getPosition, angle)
+            body.applyForceToCenter(dirVector.scl(controllable.speed), true)
           }
         }
     }
@@ -263,7 +270,9 @@ class MainScreen extends ScreenAdapter {
               initialVelocity = v,
               bodyType = BodyType.DynamicBody,
               bullet = true,
-              density = 0.0001f)
+              density = 0.0001f,
+              angle = dirVector.angleRad()
+            )
             projectileEntity
               .update(projectileBody)
               .update(Projectile(10))
@@ -415,6 +424,20 @@ class MainScreen extends ScreenAdapter {
       lazy val batch: SpriteBatch = new SpriteBatch()
       var initialized = false
 
+      lazy val textureNameBase: Entity ~~> TextureRegion = {
+        val List(ship, projectile, enemy) = List("ship", "bolt", "enemy")
+          .map(_ + ".png")
+          .map(file => new TextureRegion(new Texture(Gdx.files.internal(file))))
+
+        {
+          case e if e.get[Allegiance].contains(Player) => ship
+          case e if e.get[Allegiance].contains(Enemy)  => enemy
+          case e if e.has[Projectile]                  => projectile
+        }
+      }
+
+      lazy val textureNames = textureNameBase.lift
+
       () =>
         {
           if (!initialized) {
@@ -422,16 +445,43 @@ class MainScreen extends ScreenAdapter {
             initialized = true
           }
 
-          Gdx.gl.glClearColor(0, 0, 0.5f, 1)
+          Gdx.gl.glClearColor(0, 0, 0f, 1)
           Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT)
           camera.update()
           batch.setProjectionMatrix(camera.combined)
           batch.begin()
+
+          for {
+            e <- g.entities
+            bodyComp <- e.get[BodyComponent]
+            sprite <- textureNames(e)
+          } {
+
+            val scaledSpriteWidth = sprite.getRegionWidth / config.display.SpriteScaling
+            val scaledSpriteHeight = sprite.getRegionHeight / config.display.SpriteScaling
+
+            val body = bodyComp.body
+            val coord = body.getPosition
+            val halfWidth = scaledSpriteWidth / 2
+            val halfHeight = scaledSpriteHeight / 2
+
+            batch.draw(
+              sprite,
+              coord.x - halfWidth,
+              coord.y - halfHeight,
+              halfWidth,
+              halfHeight,
+              scaledSpriteWidth,
+              scaledSpriteHeight,
+              1f,
+              1f,
+              Math.toDegrees(body.getAngle).toFloat
+            )
+          }
+
           val currentScore = globalEntity.get[global.HighScore].map(_.score).getOrElse(0)
           font.draw(batch, s"Score: $currentScore", 0, font.getCapHeight)
           batch.end()
-
-          debugRenderer.render(world, camera.combined)
         }
     }
 

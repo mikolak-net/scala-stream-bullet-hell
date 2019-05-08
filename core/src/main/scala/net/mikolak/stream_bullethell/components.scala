@@ -20,12 +20,14 @@ object components {
                density: Float = 1f,
                sensor: Boolean = false,
                bullet: Boolean = false,
-               fixedRotation: Boolean = true)(implicit world: World): BodyComponent = {
+               fixedRotation: Boolean = true,
+               angle: Float = 0)(implicit world: World): BodyComponent = {
       val bodyDef = new BodyDef
       bodyDef.`type` = bodyType
       bodyDef.bullet = bullet
       bodyDef.position.set(center)
       bodyDef.fixedRotation = fixedRotation
+      bodyDef.angle = angle
 
       val circle = new CircleShape()
       circle.setRadius(radius)
