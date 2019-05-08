@@ -5,6 +5,7 @@ import java.time.Instant
 import com.badlogic.gdx.math.Vector2
 import com.badlogic.gdx.physics.box2d.BodyDef.BodyType
 import com.badlogic.gdx.physics.box2d.{Body, BodyDef, CircleShape, FixtureDef, World}
+import net.mikolak.stream_bullethell.config.world
 import net.mikolak.stream_bullethell.entity.{Component, Entity}
 
 object components {
@@ -18,11 +19,13 @@ object components {
                bodyType: BodyType = BodyType.DynamicBody,
                density: Float = 1f,
                sensor: Boolean = false,
-               bullet: Boolean = false)(implicit world: World): BodyComponent = {
+               bullet: Boolean = false,
+               fixedRotation: Boolean = true)(implicit world: World): BodyComponent = {
       val bodyDef = new BodyDef
       bodyDef.`type` = bodyType
       bodyDef.bullet = bullet
       bodyDef.position.set(center)
+      bodyDef.fixedRotation = fixedRotation
 
       val circle = new CircleShape()
       circle.setRadius(radius)

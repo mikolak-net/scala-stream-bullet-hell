@@ -52,6 +52,7 @@ object config {
         val ContactDamage = 20
         val MoveForce = 100
         val ForceApplyTickInterval = 10
+        val StopAngleThreshold = 90
       }
     }
 
@@ -177,8 +178,16 @@ class MainScreen extends ScreenAdapter {
           } {
             val playerLocation = playerBody.body.getPosition
             val enemyLocation = enemyBody.body.getPosition
-            val forceVector = playerLocation.cpy.sub(enemyLocation).setLength(gen.enemies.MoveForce)
-            enemyBody.body.applyForceToCenter(forceVector, true)
+            val beelineDirection = playerLocation.cpy.sub(enemyLocation)
+
+            if (beelineDirection
+                  .angle(enemyBody.body.getLinearVelocity)
+                  .abs < gen.enemies.StopAngleThreshold) {
+              val forceVector = beelineDirection.setLength(gen.enemies.MoveForce)
+              enemyBody.body.applyForceToCenter(forceVector, true)
+            } else {
+              enemyBody.body.setLinearVelocity(0, 0)
+            }
           }
         }
     }
