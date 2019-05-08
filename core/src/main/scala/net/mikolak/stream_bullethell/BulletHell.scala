@@ -18,7 +18,7 @@ import akka.stream.scaladsl.{
 import com.badlogic.gdx.Input.Keys
 import com.badlogic.gdx.graphics.g2d.{BitmapFont, SpriteBatch}
 import com.badlogic.gdx.graphics.{GL20, OrthographicCamera}
-import com.badlogic.gdx.math.Vector2
+import com.badlogic.gdx.math.{Rectangle, Vector2}
 import com.badlogic.gdx.physics.box2d.BodyDef.BodyType
 import com.badlogic.gdx.physics.box2d._
 import com.badlogic.gdx.{Game, Gdx, ScreenAdapter}
@@ -261,7 +261,11 @@ class MainScreen extends ScreenAdapter {
               initialVelocity = v,
               bodyType = BodyType.KinematicBody,
               sensor = true)
-            projectileEntity.update(projectileBody).update(Projectile(10)).update(Health(10))
+            projectileEntity
+              .update(projectileBody)
+              .update(Projectile(10))
+              .update(Health(10))
+              .update(OutOfBoundDestroy)
             g.entities.append(projectileEntity)
           }
         }
@@ -325,6 +329,59 @@ class MainScreen extends ScreenAdapter {
       }
     }
 
+    val outOfBoundTeleportHandler = (g: GameState) => {
+      val WorldRectangle = new Rectangle(0f, 0f, config.world.Width.d, config.world.Height.d)
+      val TeleportAmount = 2
+
+      () =>
+        for {
+          bodyEntity <- g.entities
+            .filter(_.has[BodyComponent])
+            .filter(!_.has[OutOfBoundDestroy.type])
+          bodyComponent <- bodyEntity.get[BodyComponent]
+          if !WorldRectangle.contains(bodyComponent.body.getWorldCenter)
+          body = bodyComponent.body
+          bodyCenter = body.getWorldCenter
+        } {
+          //normalize center vector for world offsets
+          val bcN = bodyCenter.cpy().sub(WorldRectangle.x, WorldRectangle.y)
+
+          //adjust out of bounds for x
+          if (bcN.x < 0) {
+            bcN.x = WorldRectangle.width - TeleportAmount
+          } else if (bcN.x > WorldRectangle.width) {
+            bcN.x = 0 + TeleportAmount
+          }
+          //adjust out of bounds for y
+          if (bcN.y < 0) {
+            bcN.y = WorldRectangle.height - TeleportAmount
+          } else if (bcN.y > WorldRectangle.height) {
+            bcN.y = 0 + TeleportAmount
+          }
+
+          //denormalize
+          val newCenter = bcN.add(WorldRectangle.x, WorldRectangle.y)
+          body.setTransform(newCenter, body.getAngle)
+        }
+    }
+
+    val outOfBoundRemovalHandler = (g: GameState) => {
+      val WorldRectangle = new Rectangle(0f, 0f, config.world.Width.d, config.world.Height.d)
+
+      () =>
+        for {
+          bodyEntity <- g.entities
+            .filter(_.has[BodyComponent])
+            .filter(_.has[OutOfBoundDestroy.type])
+          bodyComponent <- bodyEntity.get[BodyComponent]
+          if !WorldRectangle.contains(bodyComponent.body.getWorldCenter)
+        } {
+          //TODO: change into event model for creation/destruction so this can be split
+          world.destroyBody(bodyComponent.body)
+          entities.remove(entities.indexOf(bodyEntity))
+        }
+    }
+
     val highScoreCounter = (g: GameState) => {
       import config.scoring._
       () =>
@@ -356,6 +413,8 @@ class MainScreen extends ScreenAdapter {
           shootCollisionHandler,
           contactDamageHandler,
           destructionHandler,
+          outOfBoundTeleportHandler,
+          outOfBoundRemovalHandler,
           highScoreCounter
         )).↓)
         .toMat(Sink.queue())(Keep.both)

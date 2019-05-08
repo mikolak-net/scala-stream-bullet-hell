@@ -51,6 +51,7 @@ object components {
   case class Projectile(dmg: Int) extends Component
   case class ContactDamaging(dmg: Int) extends Component
   case class Controllable(speed: Float) extends Component
+  object OutOfBoundDestroy extends Component
 
   object global {
 
