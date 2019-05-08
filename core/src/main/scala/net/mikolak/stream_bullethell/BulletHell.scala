@@ -40,14 +40,19 @@ object config {
   object scoring {
     val PointsPerDestroyed = 10
     val PointPerTimeUnitSurvived = 1
-    val TimeUnitSurvivedInMs = 10000
+    val TimeUnitSurvivedInMs = 10000L
   }
 
   object world {
+
+    object player {
+      val MercyInvulnerabilityGracePeriod = 1000L
+    }
+
     object gen {
       object enemies {
         val StartSpawned = 5
-        val NewSpawnEveryMs = 20000
+        val NewSpawnEveryMs = 20000L
         val StartHealth = 20
         val ContactDamage = 20
         val MoveForce = 100
@@ -129,6 +134,8 @@ class MainScreen extends ScreenAdapter {
           playerEntity.update(Allegiance.player)
           playerEntity.update(Controllable(1000f))
           playerEntity.update(Health(200))
+          playerEntity.update(
+            MercyInvulnerability(0, config.world.player.MercyInvulnerabilityGracePeriod))
           g.entities.append(playerEntity)
 
           g.globalEntity.update(global.HighScore(0))
@@ -306,8 +313,18 @@ class MainScreen extends ScreenAdapter {
           health <- damaged.get[Health]
           newHp = health.hp - dmg
         } {
-          damaged.update(health.copy(newHp))
-          println(s"Contact damage: $newHp")
+          val currentTime = System.currentTimeMillis()
+          val mercy = damaged.get[MercyInvulnerability]
+
+          val shouldBeDamaged = mercy.forall(m => currentTime > m.lastDmgMs + m.gracePeriodMs)
+
+          if (shouldBeDamaged) {
+            damaged.update(health.copy(newHp))
+            mercy.foreach(m => damaged.update(m.copy(lastDmgMs = currentTime)))
+            println(s"Contact damage: $newHp")
+          } else {
+            println("MERCY")
+          }
         }
       }
     }
