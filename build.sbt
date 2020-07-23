@@ -16,16 +16,16 @@ lazy val desktopJarName = SettingKey[String]("desktop-jar-name", "name of JAR fi
 
 
 version := "0.1"
-scalaVersion := "2.12.8"
+scalaVersion := "2.12.12"
 
 
 lazy val coreSettings = plugins.JvmPlugin.projectSettings ++ Seq(
   libgdxVersion := "1.9.6",
-    akkaVersion := "2.5.14",
+    akkaVersion := "2.6.8",
   libraryDependencies ++= Seq(
     "com.badlogicgames.gdx" % "gdx" % libgdxVersion.value,
     "com.badlogicgames.gdx" % "gdx-box2d" % libgdxVersion.value,
-    "net.mikolak" %% "travesty" % s"0.9_${akkaVersion.value}",
+    "net.mikolak" %% "travesty" % s"0.9.1_${akkaVersion.value}",
     "org.typelevel" %% "cats-core" % "2.0.0-M1"
   )  ++
     Seq("akka-stream"
@@ -58,7 +58,10 @@ lazy val coreSettings = plugins.JvmPlugin.projectSettings ++ Seq(
 lazy val extractNatives = TaskKey[Unit]("extract-natives", "Extracts native files") 
 
 lazy val natives = Seq(
-  ivyConfigurations += config("natives"),
+  ivyConfigurations += {
+    val Natives = config("natives")
+    Natives
+  },
   nativeExtractions := Seq.empty,
   extractNatives := {
     val jars = update.value.select(configurationFilter("natives"))
