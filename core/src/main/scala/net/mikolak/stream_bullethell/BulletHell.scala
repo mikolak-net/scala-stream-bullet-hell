@@ -10,10 +10,13 @@ import akka.stream.scaladsl.{
   Flow,
   GraphDSL,
   Keep,
+  RunnableGraph,
   Sink,
   SinkQueueWithCancel,
   Source,
-  ZipN
+  ZipN,
+  ZipWith3,
+  ZipWithN
 }
 import com.badlogic.gdx.Input.Keys
 import com.badlogic.gdx.graphics.g2d.{BitmapFont, SpriteBatch, TextureRegion}
@@ -34,6 +37,7 @@ import scala.util.Random
 import cats.instances.tuple._
 import cats.syntax.bifunctor._
 import net.mikolak.stream_bullethell.components.global.HighScore
+import net.mikolak.travesty.OutputFormat.{PNG, SVG}
 
 object config {
 
@@ -94,12 +98,13 @@ class MainScreen extends ScreenAdapter {
     ActorMaterializerSettings(actorSystem)
       .withSupervisionStrategy(loggingDecider))
 
-  val tickSource = Source.actorRef[GameState](bufferSize = 1, OverflowStrategy.dropNew)
+  def tickSource() =
+    Source.actorRef[GameState](bufferSize = 1, OverflowStrategy.dropBuffer).named("ticks")
 
   // format: off
-  private def batchedLazySource[T: TypeTag](batchBufferSize: Int = 100): Source[List[T], ActorRef] =
-    Source
-      .actorRef[T](bufferSize = 0, OverflowStrategy.dropTail).↓
+  private def batchedLazySource[T: TypeTag](batchBufferSize: Int = 1000): Source[List[T], ActorRef] =
+    (Source
+      .actorRef[T](bufferSize = 0, OverflowStrategy.fail).named(implicitly[TypeTag[T]].toString().init.split('.').last).↓)
       .batch(batchBufferSize, List(_))(_ :+ _).↓
       .extrapolate(_ => Iterator.continually(List.empty[T]), Some(List.empty[T])).↓
   // format: on
@@ -237,7 +242,7 @@ class MainScreen extends ScreenAdapter {
     }
 
     val shootUiHandler = (g: GameState) => {
-      val ProjectileSpeed = 2000f
+      val ProjectileSpeed = 20f
       val SpacingOffsetScale = 1.3f
       val KeyMultipliers: KeyboardInput ~~> (Float, Float) = {
         case KeyUp(Keys.A) => (-1f, 0f)
@@ -485,34 +490,48 @@ class MainScreen extends ScreenAdapter {
         }
     }
 
-    val graph =
-      tickSource.↓.zipWithMat(
-        batchedLazySource[KeyboardInput]()
-      )((gs, es) => gs.copy(keyEvents = es))(Keep.both).↓.zipWithMat( //TODO: generalize
-        batchedLazySource[ContactEvent]())((gs, cs) => gs.copy(contactEvents = cs))(Keep.both)
-        .via(setUpLogic(List(
-          coreGenerator,
-          enemyGenerator,
-          enemyAi,
-          worldUpdater,
-          tickIncrementer,
-          controlHandler,
-          shootUiHandler,
-          shootCollisionHandler,
-          contactDamageHandler,
-          destructionHandler,
-          outOfBoundTeleportHandler,
-          outOfBoundRemovalHandler,
-          highScoreCounter,
-          renderer
-        )).↓)
+    val combinedSource = Source.fromGraph(
+      GraphDSL.create(tickSource(),
+                      batchedLazySource[KeyboardInput](),
+                      batchedLazySource[ContactEvent]())((_, _, _)) {
+        implicit b => (ticks, keyboardInput, contactEvent) =>
+          import GraphDSL.Implicits._
+          val zipper = b.add(
+            new ZipWith3[GameState, List[KeyboardInput], List[ContactEvent], GameState](
+              (g, kis, ces) => g.copy(keyEvents = kis, contactEvents = ces)))
+          ticks ~> zipper.in0
+          keyboardInput ~> zipper.in1
+          contactEvent ~> zipper.in2
+
+          SourceShape(zipper.out)
+      })
+
+    val graph: RunnableGraph[((ActorRef, ActorRef, ActorRef), SinkQueueWithCancel[Seq[Action]])] =
+      combinedSource
+        .via(
+          setUpLogic(List(
+            coreGenerator,
+            enemyGenerator,
+            enemyAi,
+            worldUpdater,
+            tickIncrementer,
+            controlHandler,
+            shootUiHandler,
+            shootCollisionHandler,
+            contactDamageHandler,
+            destructionHandler,
+            outOfBoundTeleportHandler,
+            outOfBoundRemovalHandler,
+            highScoreCounter,
+            renderer
+          )).↓)
         .toMat(Sink.queue())(Keep.both)
 
     // Enable if you want graph:
     //println(net.mikolak.travesty.toString(graph, Text))
-    //net.mikolak.travesty.toFile(graph, SVG, net.mikolak.travesty.TopToBottom)("/tmp/gamegraph.svg")
+    // net.mikolak.travesty.toFile(graph, PNG, net.mikolak.travesty.LeftToRight)("/tmp/gamegraph.png")
 
-    val (((sourceActor, inputActor), contactActor), sinkQueue) = graph.run()
+    val ((sourceActor, inputActor, contactActor), sinkQueue) = graph.run()
 
     tickActor = Some(sourceActor)
     actionQueue = Some(sinkQueue)
